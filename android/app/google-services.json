@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "826255492716",
+    "project_id": "smartgig-8dc6b",
+    "storage_bucket": "smartgig-8dc6b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:826255492716:android:6c88e414334f0733d93a49",
+        "android_client_info": {
+          "package_name": "com.example.smartgig"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDPTyqoMaUpTKrTCfWEYPmSB59P5kS4dI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

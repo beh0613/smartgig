@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # smartgig
 
 A new Flutter project.
@@ -14,3 +15,6 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+=======
+# InnovateX
+>>>>>>> d5b500eee68ef29a0d03edd87c917b0b50c1a147

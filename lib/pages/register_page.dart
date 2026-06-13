@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart'
-    as supabase; // Prefix to avoid conflict with project User model
+import 'package:supabase_flutter/supabase_flutter.dart' as supabase;
 import '../widgets/custom_textfield.dart';
 import 'package:intl/intl.dart';
 import 'identity_verification_page.dart';
 
 class RegisterPage extends StatefulWidget {
   const RegisterPage({super.key});
+
   @override
   State<RegisterPage> createState() => _RegisterPageState();
 }
@@ -22,8 +22,26 @@ class _RegisterPageState extends State<RegisterPage> {
 
   String _gender = 'Male';
   DateTime? _selectedDate;
-  String? _error;
+
   bool _isLoading = false;
+  bool _obscurePass = true;
+  bool _obscureConfirm = true;
+  bool _passwordsMatch = true;
+  String? _error;
+
+  bool _isDialogOpen = false;
+
+  @override
+  void dispose() {
+    _nameCtr.dispose();
+    _emailCtr.dispose();
+    _phoneCtr.dispose();
+    _addressCtr.dispose();
+    _ageCtr.dispose();
+    _passCtr.dispose();
+    _confirmCtr.dispose();
+    super.dispose();
+  }
 
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
@@ -32,93 +50,109 @@ class _RegisterPageState extends State<RegisterPage> {
       firstDate: DateTime(1920),
       lastDate: DateTime.now(),
     );
-    if (picked != null && picked != _selectedDate) {
+
+    if (picked != null) {
       setState(() {
         _selectedDate = picked;
       });
     }
   }
 
-  void _handleSignUp() async {
-    setState(() => _error = null);
-
-    // 1. Validation Logic
-    if (_nameCtr.text.isEmpty ||
-        _emailCtr.text.isEmpty ||
-        _phoneCtr.text.isEmpty ||
-        _selectedDate == null ||
-        _passCtr.text.isEmpty) {
-      setState(() => _error = 'Please fill all fields and select DOB');
-      return;
-    }
-
-    if (_passCtr.text != _confirmCtr.text) {
-      setState(() => _error = 'Passwords do not match');
-      return;
-    }
-
-    setState(() => _isLoading = true);
+  Future<void> _handleSignUp() async {
+    setState(() {
+      _error = null;
+      _isLoading = true;
+    });
 
     try {
-      // 2. Register in Supabase Auth
-      // Because Option B is chosen (Confirm Email OFF), this returns a user AND session immediately
+      // 1️⃣ Form Validation Bound Checks
+      if (_nameCtr.text.isEmpty ||
+          _emailCtr.text.isEmpty ||
+          _phoneCtr.text.isEmpty ||
+          _selectedDate == null ||
+          _passCtr.text.isEmpty) {
+        setState(() {
+          _error = "Please fill all required fields";
+          _isLoading = false;
+        });
+        return;
+      }
+
+      if (!_passwordsMatch) {
+        setState(() {
+          _error = "Passwords do not match";
+          _isLoading = false;
+        });
+        return;
+      }
+
+      // 2️⃣ Register User inside Supabase Auth Engine
       final response = await supabase.Supabase.instance.client.auth.signUp(
         email: _emailCtr.text.trim(),
         password: _passCtr.text,
+        emailRedirectTo: 'io.supabase.flutter://login-callback',
       );
 
-      final String? userId = response.user?.id;
+      final user = response.user;
+      if (user == null) throw Exception("User creation failed");
 
-      if (userId != null) {
-        // 3. Bundle user data to pass to the next page
-        Map<String, dynamic> tempUserData = {
-          'id': userId,
-          'name': _nameCtr.text.trim(),
-          'email': _emailCtr.text.trim(),
-          'phone': _phoneCtr.text.trim(),
-          'address': _addressCtr.text.trim(),
-          'age': _ageCtr.text.trim(),
-          'gender': _gender,
-          'dob': DateFormat('yyyy-MM-dd').format(_selectedDate!),
-          'password': _passCtr.text,
-        };
+      // 3️⃣ Upsert Pending Driver Record Payload Immediately
+      // Saves state variables safely into database before the user leaves the application to verify email
+      await supabase.Supabase.instance.client.from('users').upsert({
+        'id': user.id,
+        'name': _nameCtr.text.trim(),
+        'email': _emailCtr.text.trim(),
+        'phone': _phoneCtr.text.trim(),
+        'address': _addressCtr.text.trim(),
+        'age': int.tryParse(_ageCtr.text),
+        'gender': _gender,
+        'dob': DateFormat('yyyy-MM-dd').format(_selectedDate!),
+        'gmail_confirmation_status': false, // Flipped to true by global stream listener in main.dart upon click
+      });
 
-        if (!mounted) return;
-
-        // 4. Navigate to Identity Verification Page immediately
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) =>
-                IdentityVerificationPage(userData: tempUserData),
-          ),
-        );
-
-        // 5. User Feedback
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Account created! Let's verify your documents."),
-            backgroundColor: Colors.blue,
+      // 4️⃣ Show User Verification Dialog Prompt
+      if (!_isDialogOpen && mounted) {
+        _isDialogOpen = true;
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text("Confirmation Link Sent"),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                Text("A verification activation path has been pushed to your email inbox. Please view your Gmail on this mobile device and select the confirmation link to begin verification."),
+                SizedBox(height: 20),
+                CircularProgressIndicator(),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(dialogContext);
+                  _isDialogOpen = false;
+                  Navigator.pushReplacementNamed(context, '/login');
+                },
+                child: const Text("GO TO LOGIN"),
+              )
+            ],
           ),
         );
       }
     } on supabase.AuthException catch (e) {
-      // Handle "User already exists" (422) or other auth errors
-      setState(() => _error = e.message);
+      setState(() { _error = e.message; });
     } catch (e) {
-      setState(() => _error = "An unexpected error occurred.");
+      setState(() { _error = e.toString(); });
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      setState(() { _isLoading = false; });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    // UI code remains the same as your provided version
     return Scaffold(
       appBar: AppBar(
         title: const Text('Create Account - Step 1'),
-        elevation: 0,
         centerTitle: true,
       ),
       body: SingleChildScrollView(
@@ -128,17 +162,17 @@ class _RegisterPageState extends State<RegisterPage> {
           children: [
             const Text(
               "PERSONAL DETAILS",
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const Divider(),
-            const SizedBox(height: 10),
+
             Row(
               children: [
                 Expanded(
                   flex: 3,
                   child: CustomTextField(
                     controller: _nameCtr,
-                    hint: 'Full Name',
+                    hint: "Full Name",
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -146,124 +180,165 @@ class _RegisterPageState extends State<RegisterPage> {
                   flex: 1,
                   child: CustomTextField(
                     controller: _ageCtr,
-                    hint: 'Age',
+                    hint: "Age",
                     keyboardType: TextInputType.number,
                   ),
                 ),
               ],
             ),
+
             const SizedBox(height: 12),
+
             CustomTextField(
               controller: _emailCtr,
-              hint: 'Email Address',
+              hint: "Email Address",
               keyboardType: TextInputType.emailAddress,
             ),
+
             const SizedBox(height: 12),
+
             CustomTextField(
               controller: _phoneCtr,
-              hint: 'Phone Number (e.g. 0123456789)',
+              hint: "Phone Number",
               keyboardType: TextInputType.phone,
             ),
+
             const SizedBox(height: 12),
-            CustomTextField(controller: _addressCtr, hint: 'Home Address'),
+
+            CustomTextField(
+              controller: _addressCtr,
+              hint: "Home Address",
+            ),
+
             const SizedBox(height: 12),
-            const Text("Gender", style: TextStyle(fontWeight: FontWeight.w500)),
+
+            const Text("Gender"),
             Row(
               children: [
-                Radio<String>(
+                Radio(
                   value: 'Male',
                   groupValue: _gender,
-                  onChanged: (v) => setState(() => _gender = v!),
+                  onChanged: (value) {
+                    setState(() { _gender = value!; });
+                  },
                 ),
                 const Text("Male"),
-                const SizedBox(width: 20),
-                Radio<String>(
+                Radio(
                   value: 'Female',
                   groupValue: _gender,
-                  onChanged: (v) => setState(() => _gender = v!),
+                  onChanged: (value) {
+                    setState(() { _gender = value!; });
+                  },
                 ),
                 const Text("Female"),
               ],
             ),
+
             const SizedBox(height: 10),
+
             Container(
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey[300]!),
+                border: Border.all(color: Colors.grey.shade300),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: ListTile(
                 title: Text(
                   _selectedDate == null
-                      ? 'Select Date of Birth'
-                      : 'DOB: ${DateFormat('yyyy-MM-dd').format(_selectedDate!)}',
-                  style: TextStyle(
-                    color: _selectedDate == null
-                        ? Colors.grey[600]
-                        : Colors.black,
-                  ),
+                      ? "Select Date of Birth"
+                      : "DOB: ${DateFormat('yyyy-MM-dd').format(_selectedDate!)}",
                 ),
-                trailing: const Icon(Icons.calendar_today, color: Colors.blue),
+                trailing: const Icon(Icons.calendar_today),
                 onTap: () => _selectDate(context),
               ),
             ),
+
             const SizedBox(height: 25),
+
             const Text(
               "SECURITY",
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const Divider(),
-            const SizedBox(height: 10),
+
             CustomTextField(
               controller: _passCtr,
-              hint: 'Password',
-              obscure: true,
+              hint: "Password",
+              obscure: _obscurePass,
+              onChanged: (value) {
+                setState(() {
+                  _passwordsMatch = _passCtr.text == _confirmCtr.text;
+                });
+              },
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _obscurePass ? Icons.visibility_off : Icons.visibility,
+                ),
+                onPressed: () {
+                  setState(() { _obscurePass = !_obscurePass; });
+                },
+              ),
             ),
+
             const SizedBox(height: 12),
+
             CustomTextField(
               controller: _confirmCtr,
-              hint: 'Confirm Password',
-              obscure: true,
+              hint: "Confirm Password",
+              obscure: _obscureConfirm,
+              onChanged: (value) {
+                setState(() {
+                  _passwordsMatch = _passCtr.text == _confirmCtr.text;
+                });
+              },
+              suffixIcon: IconButton(
+                icon: Icon(
+                  _obscureConfirm ? Icons.visibility_off : Icons.visibility,
+                ),
+                onPressed: () {
+                  setState(() { _obscureConfirm = !_obscureConfirm; });
+                },
+              ),
             ),
-            const SizedBox(height: 20),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 15),
+
+            if (!_passwordsMatch)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
                 child: Text(
-                  _error!,
-                  style: const TextStyle(
-                    color: Colors.red,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  "Passwords do not match",
+                  style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
                 ),
               ),
+
+            const SizedBox(height: 20),
+
+            if (_error != null)
+              Text(
+                _error!,
+                style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+              ),
+
+            const SizedBox(height: 10),
+
             _isLoading
                 ? const Center(child: CircularProgressIndicator())
                 : SizedBox(
-                    width: double.infinity,
-                    height: 55,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1E3A8A),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                      onPressed: _handleSignUp,
-                      child: const Text(
-                        'NEXT: IDENTITY VERIFICATION',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-            const SizedBox(height: 15),
+              width: double.infinity,
+              height: 55,
+              child: ElevatedButton(
+                onPressed: _handleSignUp,
+                child: const Text(
+                  "NEXT: IDENTITY VERIFICATION",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 10),
+
             Center(
               child: TextButton(
-                onPressed: () =>
-                    Navigator.pushReplacementNamed(context, '/login'),
-                child: const Text('Already have an account? Login here'),
+                onPressed: () => Navigator.pushReplacementNamed(context, '/login'),
+                child: const Text("Already have an account? Login here"),
               ),
             ),
           ],

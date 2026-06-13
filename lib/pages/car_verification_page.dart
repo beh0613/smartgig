@@ -46,14 +46,15 @@ class _CarVerificationPageState extends State<CarVerificationPage> {
   }
 
   void _submit() async {
-    if (_plateCtr.text.isEmpty ||
-        _modelCtr.text.isEmpty ||
-        _regFormPath == null) {
+    // 1. Validation check
+    debugPrint("--- Submission Started ---");
+    debugPrint("Plate: ${_plateCtr.text}, Model: ${_modelCtr.text}, RegPath: $_regFormPath");
+
+    if (_plateCtr.text.isEmpty || _modelCtr.text.isEmpty || _regFormPath == null) {
+      debugPrint("Validation Failed: Missing required fields or Registration Form");
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
-            "Please provide plate number and upload the Registration Form",
-          ),
+          content: Text("Please provide plate number and upload the Registration Form"),
           backgroundColor: Colors.orange,
         ),
       );
@@ -62,33 +63,58 @@ class _CarVerificationPageState extends State<CarVerificationPage> {
 
     setState(() => _isLoading = true);
 
-    final result = await _auth.completeRegistration(
-      userId: widget.userData['id'],
-      userData: widget.userData,
-      nric: widget.userData['nric'],
-      license: widget.userData['license'],
-      icFront: widget.userData['icFront'],
-      icBack: widget.userData['icBack'],
-      vehicleData: {
-        'carModel': _modelCtr.text.trim(),
-        'carPlate': _plateCtr.text.trim(),
-        'carColor': _colorCtr.text.trim(),
-        'carYear': _yearCtr.text.trim(),
-      },
-      regForm: _regFormPath,
-      roadTax: _roadTaxPath,
-      insurance: _insurancePath,
-    );
+    try {
+      // inside _submit...
+      final String userId = widget.userData['id'] ?? "";
+      final String name = widget.userData['name'] ?? (widget.userData['user_object'] as User?)?.name ?? "Unknown Driver"; // Fallback name
+      final String nric = widget.userData['nric'] ?? (widget.userData['user_object'] as User?)?.nric ?? "";
 
-    if (!mounted) return;
-    setState(() => _isLoading = false);
+      debugPrint("Extracted Name: $name");
+      debugPrint("Extracted NRIC: $nric");
 
-    if (result == null) {
-      _showSuccessDialog();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error: $result"), backgroundColor: Colors.red),
+      // 2. Safely extract data
+      final result = await _auth.completeRegistration(
+        userId: userId,
+        name: name,
+        userData: widget.userData,
+        nric: nric,
+        license: widget.userData['license'] ?? "",
+        icFront: widget.userData['icFront'] ?? "",
+        icBack: widget.userData['icBack'] ?? "",
+        vehicleData: {
+          'carModel': _modelCtr.text.trim(),
+          'carPlate': _plateCtr.text.trim(),
+          'carColor': _colorCtr.text.trim(),
+          'carYear': _yearCtr.text.trim(),
+        },
+        regForm: _regFormPath,
+        roadTax: _roadTaxPath,
+        insurance: _insurancePath,
       );
+
+      if (!mounted) return;
+      setState(() => _isLoading = false);
+
+      if (result == null) {
+        debugPrint("Submission Successful!");
+        _showSuccessDialog();
+      } else {
+        // This is where the AuthService returns a string error
+        debugPrint("Submission Failed with Error: $result");
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $result"), backgroundColor: Colors.red),
+        );
+      }
+    } catch (e, stacktrace) {
+      debugPrint("CRITICAL CRASH DURING SUBMIT: $e");
+      debugPrint("STACKTRACE: $stacktrace");
+
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Exception: $e"), backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -266,11 +292,11 @@ class _CarVerificationPageState extends State<CarVerificationPage> {
   }
 
   Widget _buildTextField(
-    TextEditingController controller,
-    String label,
-    IconData icon, {
-    bool isNumeric = false,
-  }) {
+      TextEditingController controller,
+      String label,
+      IconData icon, {
+        bool isNumeric = false,
+      }) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -286,8 +312,17 @@ class _CarVerificationPageState extends State<CarVerificationPage> {
       child: TextField(
         controller: controller,
         keyboardType: isNumeric ? TextInputType.number : TextInputType.text,
+        // This logic clears the "Not Set" text as soon as the user taps the box
+        onTap: () {
+          if (controller.text.trim().toLowerCase() == "not set") {
+            controller.clear();
+          }
+        },
         decoration: InputDecoration(
           labelText: label,
+          // Optional: moves the label up, but keeps a hint if the field is empty
+          hintText: "Enter $label",
+          hintStyle: TextStyle(color: Colors.grey[400], fontSize: 14),
           prefixIcon: Icon(icon, color: Colors.blue[900], size: 20),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(

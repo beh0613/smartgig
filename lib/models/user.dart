@@ -10,6 +10,7 @@ class User {
   final String nric;
   final String password;
    bool riskPreferencesFilled;
+  String? profilePicUrl; // ADD THIS LINE
 
   // Vehicle data
   final String carModel;
@@ -34,6 +35,7 @@ class User {
     required this.carColor,
     required this.carYear,
     this.riskPreferencesFilled = false,
+    this.profilePicUrl,
   });
 
   /// Factory for safe initialization in UI before data is loaded
@@ -84,6 +86,7 @@ class User {
       carYear: vehicle['car_year']?.toString() ?? '',
       // ADD THIS LINE TO READ FROM SUPABASE
       riskPreferencesFilled: map['risk_preferences_filled'] ?? false,
+      profilePicUrl: map['profile_pic_url'],
     );
   }
 }

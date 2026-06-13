@@ -7,6 +7,7 @@ import 'package:flutter_polyline_points/flutter_polyline_points.dart';
 import '../models/user.dart' as model;
 import 'chat_detail_page.dart';
 import 'passenger_feedback_page.dart';
+import 'reportlocationpage.dart';
 
 class ActiveRidePage extends StatefulWidget {
   final Map<String, dynamic> rideData;
@@ -41,10 +42,25 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
   @override
   void initState() {
     super.initState();
+    // NEW: Get current position and draw the first path to the passenger
+    Geolocator.getCurrentPosition().then((Position pos) {
+      _getPolyline(
+        LatLng(pos.latitude, pos.longitude), // Start at Driver
+        LatLng(
+            double.parse(widget.rideData['pickup_latitude'].toString()),
+            double.parse(widget.rideData['pickup_longitude'].toString())
+        ), // End at Pickup
+      );
+    });
+    // Explicitly clear local collections to ensure a fresh start
+    _markers.clear();
+    _polylines.clear();
+    _polylineCoordinates.clear();
+
     _currentStatus = widget.rideData['status'] ?? 'accepting';
 
     _initMarkers();
-    _getPolyline();
+
     _checkCurrentStatus();
     _subscribeToBookingChanges();
   }
@@ -58,9 +74,9 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
     super.dispose();
   }
 
-  // --- REALTIME LOGIC ---
+  // Inside _ActiveRidePageState in ActiveRidePage.dart
+
   void _subscribeToBookingChanges() {
-    // FIX: Use the classes directly without 'supabase.' prefix
     _statusSubscription = _supabase
         .channel('public:bookings:id=${widget.rideData['id']}')
         .onPostgresChanges(
@@ -73,18 +89,24 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
         value: widget.rideData['id'],
       ),
       callback: (payload) {
-        final String newStatus = payload.newRecord['status'];
+        // Use .toLowerCase() and .trim() to be 100% sure
+        final String newStatus = (payload.newRecord['status'] as String)
+            .toLowerCase()
+            .trim();
+
         if (mounted) {
           setState(() {
             _currentStatus = newStatus;
           });
+
           if (newStatus == 'paid') {
-            _showSuccessOverlay();
+            debugPrint("✅ Realtime: Payment confirmed!");
+            _showSuccessOverlay(); // Show the snackbar
+            _showPaymentSummary(); // Open the rating dialog
           }
         }
       },
-    )
-        .subscribe();
+    ).subscribe();
   }
 
   void _showSuccessOverlay() {
@@ -108,8 +130,11 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
     try {
       final data = await _supabase
           .from('bookings')
-          .select('status')
-          .eq('id', widget.rideData['id'])
+          .select()
+          .or(
+          'status.eq.accepting,status.eq.on_way,status.eq.picked_up,status.eq.paid') // Only active statuses
+          .order('created_at', ascending: false) // Get the latest one
+          .limit(1)
           .single();
 
       final status = data['status'] as String;
@@ -129,23 +154,88 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
 
   Future<void> _updateRideStatus(String newStatus) async {
     try {
+      // 1. Update Supabase
       await _supabase.from('bookings').update({'status': newStatus}).eq(
           'id', widget.rideData['id']);
+
+      if (!mounted) return;
+
+      // 2. Get current positions for routing
+      Position currentPos = await Geolocator.getCurrentPosition();
+      LatLng driverLatLng = LatLng(currentPos.latitude, currentPos.longitude);
+
+      final pickup = LatLng(
+        double.parse(widget.rideData['pickup_latitude'].toString()),
+        double.parse(widget.rideData['pickup_longitude'].toString()),
+      );
+      final destination = LatLng(
+        double.parse(widget.rideData['destination_latitude'].toString()),
+        double.parse(widget.rideData['destination_longitude'].toString()),
+      );
+
       setState(() {
         _currentStatus = newStatus;
-        if (newStatus == 'on_way') {
-          _isJourneyStarted = true;
-          _startLiveTracking();
+        _markers.clear();
+
+        // --- PHASE 2: PASSENGER IN CAR -> HEADING TO DESTINATION ---
+        if (newStatus == 'picked_up') {
+          _markers.add(Marker(
+            markerId: const MarkerId('destination'),
+            position: destination,
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueRed),
+            infoWindow: const InfoWindow(title: "Drop-off Location"),
+          ));
+
+          // Redraw curvy polyline from current location to final destination
+          _getPolyline(driverLatLng, destination);
+        }
+
+        // --- PHASE 1: DRIVING TO PICKUP ---
+        else {
+          _markers.add(Marker(
+            markerId: const MarkerId('pickup'),
+            position: pickup,
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+                BitmapDescriptor.hueGreen),
+            infoWindow: const InfoWindow(title: "Pickup Passenger"),
+          ));
+
+          // Redraw curvy polyline from driver to passenger
+          _getPolyline(driverLatLng, pickup);
         }
       });
 
-      // Changed Logic here
-      if (newStatus == 'completed') {
+      // 3. AUTO-ZOOM CAMERA
+      final controller = await _mapController.future;
+      LatLng target = newStatus == 'picked_up' ? destination : pickup;
+
+      // Fit both driver and the next goal in view
+      LatLngBounds bounds = LatLngBounds(
+        southwest: LatLng(
+          driverLatLng.latitude < target.latitude
+              ? driverLatLng.latitude
+              : target.latitude,
+          driverLatLng.longitude < target.longitude
+              ? driverLatLng.longitude
+              : target.longitude,
+        ),
+        northeast: LatLng(
+          driverLatLng.latitude > target.latitude
+              ? driverLatLng.latitude
+              : target.latitude,
+          driverLatLng.longitude > target.longitude
+              ? driverLatLng.longitude
+              : target.longitude,
+        ),
+      );
+      controller.animateCamera(CameraUpdate.newLatLngBounds(bounds, 70));
+
+      if (newStatus == 'completed' || newStatus == 'paid') {
         _showPaymentSummary();
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Error: $e")));
+      debugPrint("Update Error: $e");
     }
   }
 
@@ -178,33 +268,30 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
     });
   }
 
-  Future<void> _getPolyline() async {
+
+  Future<void> _getPolyline(LatLng start, LatLng end) async {
     PolylinePoints polylinePoints = PolylinePoints();
     PolylineResult result = await polylinePoints.getRouteBetweenCoordinates(
       request: PolylineRequest(
-        origin: PointLatLng(
-          double.parse(widget.rideData['pickup_latitude'].toString()),
-          double.parse(widget.rideData['pickup_longitude'].toString()),
-        ),
-        destination: PointLatLng(
-          double.parse(widget.rideData['destination_latitude'].toString()),
-          double.parse(widget.rideData['destination_longitude'].toString()),
-        ),
+        origin: PointLatLng(start.latitude, start.longitude),
+        destination: PointLatLng(end.latitude, end.longitude),
         mode: TravelMode.driving,
       ),
       googleApiKey: _googleApiKey,
     );
 
     if (result.points.isNotEmpty) {
-      _polylineCoordinates.clear();
-      for (var point in result.points) {
-        _polylineCoordinates.add(LatLng(point.latitude, point.longitude));
-      }
       setState(() {
+        _polylineCoordinates.clear();
+        for (var point in result.points) {
+          _polylineCoordinates.add(LatLng(point.latitude, point.longitude));
+        }
+        _polylines.clear(); // Important: remove old lines before adding new one
         _polylines.add(Polyline(
-          polylineId: const PolylineId("route"),
+          polylineId: const PolylineId("active_route"),
           points: _polylineCoordinates,
-          color: const Color(0xFF0D47A1),
+          color: _currentStatus == 'picked_up' ? Colors.green : const Color(
+              0xFF0D47A1),
           width: 6,
         ));
       });
@@ -221,6 +308,126 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
       controller.animateCamera(CameraUpdate.newLatLng(
           LatLng(position.latitude, position.longitude)));
     });
+  }
+
+
+  void _showReportLocationSheet(LatLng location, String address) {
+    final List<Map<String, dynamic>> flags = [
+      {'label': 'Crowded', 'icon': Icons.groups, 'color': Colors.orange},
+      {'label': 'No Parking', 'icon': Icons.local_parking, 'color': Colors.red},
+      {'label': 'Dimly Lit', 'icon': Icons.nights_stay, 'color': Colors.indigo},
+      {'label': 'Traffic Jam', 'icon': Icons.traffic, 'color': Colors.amber},
+      {
+        'label': 'High Risk',
+        'icon': Icons.report_problem,
+        'color': Colors.redAccent
+      },
+      {'label': 'Easy Drop', 'icon': Icons.check_circle, 'color': Colors.green},
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      isDismissible: false, // Force them to choose or skip
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
+      builder: (context) =>
+          Padding(
+            padding: const EdgeInsets.fromLTRB(25, 20, 25, 30),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(width: 40,
+                    height: 5,
+                    decoration: BoxDecoration(color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(10))),
+                const SizedBox(height: 20),
+                const Text("How is the location right now?", style: TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 18)),
+                const SizedBox(height: 5),
+                Text(address, textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                const SizedBox(height: 25),
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      mainAxisSpacing: 15,
+                      crossAxisSpacing: 15,
+                      childAspectRatio: 0.9
+                  ),
+                  itemCount: flags.length,
+                  itemBuilder: (context, index) {
+                    return InkWell(
+                      onTap: () =>
+                          _submitLocationReport(
+                              flags[index]['label'], location, address),
+                      child: Column(
+                        children: [
+                          CircleAvatar(
+                            radius: 25,
+                            backgroundColor: flags[index]['color'].withOpacity(
+                                0.1),
+                            child: Icon(flags[index]['icon'],
+                                color: flags[index]['color']),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(flags[index]['label'], style: const TextStyle(
+                              fontSize: 11, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+                TextButton(
+                  onPressed: () => _navigateToMain(),
+                  child: const Text(
+                      "Skip Reporting", style: TextStyle(color: Colors.grey)),
+                )
+              ],
+            ),
+          ),
+    );
+  }
+
+  Future<void> _submitLocationReport(String label, LatLng pos,
+      String address) async {
+    final now = DateTime.now();
+    final int hour = now.hour;
+    String timeOfDay;
+
+    // Logic to categorize actual time
+    if (hour >= 5 && hour < 12)
+      timeOfDay = "Morning";
+    else if (hour >= 12 && hour < 17)
+      timeOfDay = "Afternoon";
+    else if (hour >= 17 && hour < 20)
+      timeOfDay = "Evening";
+    else
+      timeOfDay = "Night";
+
+    try {
+      await _supabase.from('location_reports').insert({
+        'location_address': address,
+        'latitude': pos.latitude,
+        'longitude': pos.longitude,
+        'flag_label': label,
+        'reported_at': now.toIso8601String(), // The actual timestamp
+        'time_of_day': timeOfDay, // The easy category
+        'driver_id': widget.driverUser.id
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text("Thanks! Marked as $label for $timeOfDay hours.")),
+        );
+        _navigateToMain();
+      }
+    } catch (e) {
+      debugPrint("Report Error: $e");
+      _navigateToMain();
+    }
   }
 
   // --- UI COMPONENTS ---
@@ -298,11 +505,12 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
     } else if (_currentStatus == 'picked_up') {
       buttonText = "WAITING FOR PAYMENT...";
       buttonColor = Colors.grey;
-      isEnabled = false;
+      isEnabled = false; // Button disabled while waiting for passenger to pay
     } else if (_currentStatus == 'paid') {
-      buttonText = "COMPLETE TRIP";
-      nextStatus = 'completed';
+      // NEW: Button changes to green and allows opening the rating form
+      buttonText = "PAYMENT RECEIVED - RATE NOW";
       buttonColor = Colors.green;
+      isEnabled = true;
     } else {
       buttonText = "TRIP COMPLETED";
       isEnabled = false;
@@ -324,8 +532,16 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(15))
           ),
-          onPressed: isEnabled && nextStatus != null ? () =>
-              _updateRideStatus(nextStatus!) : null,
+          onPressed: isEnabled
+              ? () {
+            if (_currentStatus == 'paid') {
+              // If they are in 'paid' status, clicking the button opens the rating dialog
+              _showPaymentSummary();
+            } else if (nextStatus != null) {
+              _updateRideStatus(nextStatus);
+            }
+          }
+              : null,
           child: Text(buttonText, style: const TextStyle(
               color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
         ),
@@ -412,26 +628,9 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
       barrierDismissible: false,
       builder: (context) =>
           AlertDialog(
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20)),
-            title: const Column(
-              children: [
-                Icon(Icons.check_circle, color: Colors.green, size: 60),
-                SizedBox(height: 10),
-                Text("Trip Completed!", textAlign: TextAlign.center),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text("Earnings for this trip:"),
-                const SizedBox(height: 10),
-                Text("RM ${widget.rideData['total_price']}",
-                    style: const TextStyle(fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green)),
-              ],
-            ),
+            title: const Text("Trip Summary"),
+            content: const Text(
+                "Payment received. Please report the location status and rate your passenger."),
             actions: [
               SizedBox(
                 width: double.infinity,
@@ -439,23 +638,37 @@ class _ActiveRidePageState extends State<ActiveRidePage> {
                   style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF0D47A1)),
                   onPressed: () {
-                    Navigator.of(context).pop(); // Close dialog
-                    // NAVIGATE TO FEEDBACK PAGE
-                    Navigator.push(
+                    Navigator.pop(context); // Close dialog
+
+                    final LatLng destLocation = LatLng(
+                      double.parse(
+                          widget.rideData['destination_latitude'].toString()),
+                      double.parse(
+                          widget.rideData['destination_longitude'].toString()),
+                    );
+
+                    // NAVIGATE TO THE NEW DEDICATED PAGE
+                    Navigator.pushReplacement(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => PassengerFeedbackPage(
-                          bookingId: widget.rideData['id'],
-                          // FIX: Pass the passenger_id from your rideData map
-                          passengerId: widget.rideData['passenger_id'].toString(),
-                          passengerName: widget.rideData['passenger_name'] ?? "Passenger",
-                          driverUser: widget.driverUser,
-                        ),
+                        builder: (context) =>
+                            ReportLocationPage(
+                              location: destLocation,
+                              address: widget.rideData['destination_address'] ??
+                                  "Unknown",
+                              driverUser: widget.driverUser,
+                              rideInfo: {
+                                'bookingId': widget.rideData['id'],
+                                'passengerId': widget.rideData['passenger_id'],
+                                'passengerName': widget
+                                    .rideData['passenger_name'],
+                              },
+                            ),
                       ),
                     );
                   },
                   child: const Text(
-                      "RATE PASSENGER", style: TextStyle(color: Colors.white)),
+                      "NEXT", style: TextStyle(color: Colors.white)),
                 ),
               ),
             ],

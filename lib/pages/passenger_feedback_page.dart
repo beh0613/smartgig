@@ -7,6 +7,10 @@ class PassengerFeedbackPage extends StatefulWidget {
   final String passengerId;
   final String passengerName;
   final model.User driverUser;
+  final VoidCallback? onComplete;
+  // Recommended: Pass actual coordinates from the active ride
+  final double destLat;
+  final double destLng;
 
   const PassengerFeedbackPage({
     super.key,
@@ -14,6 +18,9 @@ class PassengerFeedbackPage extends StatefulWidget {
     required this.passengerId,
     required this.passengerName,
     required this.driverUser,
+    this.onComplete,
+    this.destLat = 6.4675, // Defaulting to your hardcoded values if not provided
+    this.destLng = 100.5055,
   });
 
   @override
@@ -57,50 +64,72 @@ class _PassengerFeedbackPageState extends State<PassengerFeedbackPage> {
     );
   }
 
-  // --- UPDATED SUBMIT LOGIC WITH DEBUGGING ---
+  // VALIDATION & SUBMISSION
+  // VALIDATION & SUBMISSION
   Future<void> _submitFeedback() async {
     final String comment = _commentController.text.trim();
+    // Use the validated ID from the widget
+    final String driverId = widget.driverUser.id;
 
-    debugPrint("🚀 SUBMISSION STARTED");
-    debugPrint("⭐ Rating: $_rating");
-    debugPrint("⚠️ Abnormal: $_hadAbnormalRequest");
+    // 1. Safety Guard: Check for empty UUID before hitting Supabase
+    if (driverId.isEmpty) {
+      debugPrint("🚨 Error: Driver ID is empty in Feedback Page.");
+      _showCustomAlert("Session Error", "User ID not found. Please try again.");
+      return;
+    }
 
-    // 1. VALIDATION CHECK
-    if (_rating < 3 && !_hadAbnormalRequest && comment.isEmpty) {
-      debugPrint("❌ VALIDATION FAILED: Low rating requires comment");
+    // 2. HARD VALIDATION: Ensure flags are set for low ratings
+    if (_rating <= 2 && comment.isEmpty) {
       _showCustomAlert("Comment Required", "Please explain why the rating is low.");
+      return;
+    }
+
+    if (_hadAbnormalRequest && comment.length < 5) {
+      _showCustomAlert("More Info Needed", "Please describe the abnormal request in the comments.");
       return;
     }
 
     setState(() => _isSubmitting = true);
 
     try {
-      final selectedTags = _attitudeTags.entries.where((e) => e.value).map((e) => e.key).toList();
+      final selectedTags = _attitudeTags.entries
+          .where((e) => e.value)
+          .map((e) => e.key)
+          .toList();
 
       final payload = {
         'booking_id': widget.bookingId,
         'passenger_id': widget.passengerId,
-        'driver_id': widget.driverUser.id,
-        'rating': _rating.toInt(), // <--- Add .toInt() here
+        'driver_id': driverId, // Correctly mapped to UUID
+        'rating': _rating.toInt(),
         'abnormal_request': _hadAbnormalRequest,
-        'abnormal_severity': _hadAbnormalRequest ? _abnormalSeverity.toInt() : 0, // <--- Add .toInt() here
+        'abnormal_severity': _hadAbnormalRequest ? _abnormalSeverity.toInt() : 0,
         'attitude_tags': selectedTags,
         'comment': comment,
         'created_at': DateTime.now().toIso8601String(),
       };
 
-      debugPrint("📤 SENDING PAYLOAD: $payload");
-
-      final response = await _supabase.from('passenger_feedback').insert(payload).select();
-
-      debugPrint("✅ SUCCESS: $response");
+      // 3. ATOMIC UPDATE: Save feedback and mark booking as finished
+      await Future.wait([
+        _supabase.from('passenger_feedback').insert(payload),
+        _supabase.from('bookings').update({'status': 'completed'}).eq('id', widget.bookingId),
+      ]);
 
       if (mounted) {
-        Navigator.of(context).pushNamedAndRemoveUntil('/driver_dashboard', (route) => false, arguments: widget.driverUser);
+        debugPrint("✅ Feedback saved successfully for Booking: ${widget.bookingId}");
+
+        // Return to main map and refresh the driver's state
+        Navigator.pushNamedAndRemoveUntil(
+            context,
+            '/main',
+                (route) => false,
+            arguments: {'user': widget.driverUser}
+        );
       }
     } catch (e) {
-      debugPrint("🚨 SUPABASE ERROR: $e");
-      _showCustomAlert("Database Error", e.toString());
+      debugPrint("🚨 Feedback Submission Error: $e");
+      // If you still see 22P02 here, double-check that driverId isn't ""
+      _showCustomAlert("Error", "Failed to save rating: $e");
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
@@ -116,7 +145,20 @@ class _PassengerFeedbackPageState extends State<PassengerFeedbackPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFFBFBFE),
-      appBar: AppBar(elevation: 0, backgroundColor: Colors.white, foregroundColor: Colors.black87, title: const Text("Trip Summary")),
+      appBar: AppBar(
+        elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black87,
+        title: const Text("Feedback To Passenger"),
+        // Added the back icon manually
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
+          onPressed: () {
+            // This takes the user back to the ReportLocationPage
+            Navigator.pop(context);
+          },
+        ),
+      ),
       body: SingleChildScrollView(
         child: Column(
           children: [

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/user.dart' as model;
+import 'package:flutter/foundation.dart';
 
 class AuthService {
   final SupabaseClient _supabase = Supabase.instance.client;
@@ -150,6 +151,7 @@ class AuthService {
 
   Future<String?> completeRegistration({
     required String userId,
+    required String name,
     required Map<String, dynamic> userData,
     required String nric,
     required Map<String, dynamic> vehicleData,
@@ -161,6 +163,7 @@ class AuthService {
     String? insurance,
   }) async {
     try {
+      // 1. Upload files
       String? icFrontUrl = await _uploadFile(icFront ?? '', userId, 'identity');
       String? icBackUrl = await _uploadFile(icBack ?? '', userId, 'identity');
       String? licenseUrl = await _uploadFile(license ?? '', userId, 'identity');
@@ -168,33 +171,37 @@ class AuthService {
       String? taxUrl = await _uploadFile(roadTax ?? '', userId, 'vehicle');
       String? insUrl = await _uploadFile(insurance ?? '', userId, 'vehicle');
 
-      await _supabase.from('users').insert({
+      // 2. Insert into Users Table
+      // Use .upsert() so it works for both new and partially created users
+      await _supabase.from('users').upsert({
         'id': userId,
-        'name': userData['name'],
-        'email': userData['email'],
-        'phone': userData['phone'],
-        'address': userData['address'],
-        'age': int.tryParse(userData['age'].toString()),
-        'gender': userData['gender'],
+        'name': name, // Fallback to prevent crash
+        'email': userData['email'] ?? '',        // Ensure this is passed from Step 1!
+        'phone': userData['phone'] ?? '',
+        'address': userData['address'] ?? '',
+        'age': int.tryParse(userData['age']?.toString() ?? '0'),
+        'gender': userData['gender'] ?? 'Not Specified',
         'dob': userData['dob'],
+        'password': userData['password'], // Note: Ideally handle auth via Supabase Auth
         'created_at': DateTime.now().toIso8601String(),
-        'password': userData['password'],
       });
 
-      await _supabase.from('identities').insert({
+      // 3. Insert into Identities Table
+      await _supabase.from('identities').upsert({
         'user_id': userId,
-        'nric': nric,
+        'nric': nric.isEmpty ? (userData['nric'] ?? 'PENDING') : nric,
         'ic_front_path': icFrontUrl,
         'ic_back_path': icBackUrl,
         'license_path': licenseUrl,
       });
 
-      await _supabase.from('vehicles').insert({
+      // 4. Insert into Vehicles Table
+      await _supabase.from('vehicles').upsert({
         'user_id': userId,
         'car_model': vehicleData['carModel'],
         'car_plate': vehicleData['carPlate'],
         'car_color': vehicleData['carColor'],
-        'car_year': int.tryParse(vehicleData['carYear'].toString()),
+        'car_year': int.tryParse(vehicleData['carYear']?.toString() ?? '0'),
         'reg_form_path': regUrl,
         'road_tax_path': taxUrl,
         'insurance_path': insUrl,
@@ -202,6 +209,7 @@ class AuthService {
 
       return null;
     } catch (e) {
+      debugPrint("DATABASE ERROR: $e");
       return e.toString();
     }
   }

@@ -322,11 +322,13 @@ class _IdentityVerificationPageState extends State<IdentityVerificationPage> {
       return;
     }
 
-    // Prepare data to send to the next page
-    Map<String, dynamic> updatedData = Map.from(widget.userData);
-    updatedData.addAll({'nric': _nricCtr.text.trim()});
+    // 🚀 Keep everything from before, ensuring 'id' stays intact
+    Map<String, dynamic> updatedData = Map<String, dynamic>.from(widget.userData);
 
-    // Only update the path if a NEW file was picked
+    updatedData.addAll({
+      'nric': _nricCtr.text.trim(),
+    });
+
     if (_icFrontPath != null) updatedData['icFront'] = _icFrontPath;
     if (_icBackPath != null) updatedData['icBack'] = _icBackPath;
     if (_licensePath != null) updatedData['license'] = _licensePath;

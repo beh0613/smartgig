@@ -1,19 +1,27 @@
 import 'package:flutter/material.dart';
+import '../models/user.dart' as model;
 
-class WelcomePage extends StatelessWidget {
+class WelcomePage extends StatefulWidget {
   const WelcomePage({super.key});
 
   @override
+  State<WelcomePage> createState() => _WelcomePageState();
+}
+
+class _WelcomePageState extends State<WelcomePage> {
+  @override
+  void initState() {
+    super.initState();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // Brand Colors consistent with Login/Dashboard
     const primaryNavy = Color(0xFF1E3A8A);
-    const accentAzure = Color(0xFF3B82F6);
 
     return Scaffold(
       backgroundColor: Colors.white,
       body: Stack(
         children: [
-          // 1. Background Decorative Element (Top-right Circle)
           Positioned(
             top: -100,
             right: -100,
@@ -26,15 +34,12 @@ class WelcomePage extends StatelessWidget {
               ),
             ),
           ),
-
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 30.0),
               child: Column(
                 children: [
                   const Spacer(flex: 2),
-
-                  // 2. Professional Logo Display
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
@@ -65,10 +70,7 @@ class WelcomePage extends StatelessWidget {
                       ),
                     ),
                   ),
-
                   const SizedBox(height: 40),
-
-                  // 3. Branding Text
                   const Text(
                     "SMART GIG DRIVER",
                     style: TextStyle(
@@ -88,10 +90,7 @@ class WelcomePage extends StatelessWidget {
                       height: 1.5,
                     ),
                   ),
-
                   const Spacer(flex: 3),
-
-                  // 4. Primary Action: Login
                   SizedBox(
                     width: double.infinity,
                     height: 55,
@@ -115,16 +114,12 @@ class WelcomePage extends StatelessWidget {
                       ),
                     ),
                   ),
-
                   const SizedBox(height: 15),
-
-                  // 5. Secondary Action: Sign Up
                   SizedBox(
                     width: double.infinity,
                     height: 55,
                     child: OutlinedButton(
-                      onPressed: () =>
-                          Navigator.pushNamed(context, '/register'),
+                      onPressed: () => Navigator.pushNamed(context, '/register'),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: primaryNavy, width: 2),
                         foregroundColor: primaryNavy,
@@ -141,10 +136,7 @@ class WelcomePage extends StatelessWidget {
                       ),
                     ),
                   ),
-
                   const SizedBox(height: 20),
-
-                  // 6. Footer Terms
                   Text(
                     "By continuing, you agree to our Terms of Service",
                     style: TextStyle(fontSize: 12, color: Colors.grey[400]),

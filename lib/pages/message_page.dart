@@ -3,11 +3,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/user.dart' as model;
 import 'chat_detail_page.dart';
 import 'active_ride_page.dart';
+import 'package:smartgig/state/driver_state.dart';
 
-class DriverState {
-  static bool isOnline = false;
-  static Map<String, dynamic>? currentRideData;
-}
 
 class MessagePage extends StatefulWidget {
   final model.User user;
@@ -27,6 +24,7 @@ class MessagePage extends StatefulWidget {
 class _MessagePageState extends State<MessagePage> {
   final SupabaseClient _supabase = Supabase.instance.client;
   RealtimeChannel? _rideSubscription; //
+  bool _isLoading = true;
 
   @override
   void initState() {
@@ -51,21 +49,47 @@ class _MessagePageState extends State<MessagePage> {
   // Initial Check to populate the state immediately
   Future<void> _checkActiveRide() async {
     try {
-      final data = await _supabase
-          .from('bookings')
-          .select()
-          .eq('driver_id', widget.user.id)
-      // Include 'accepted' to cover all bases before 'on_way'
-          .or('status.eq.accepting,status.eq.on_way,status.eq.picked_up,status.eq.accepted')
+      // 1. Query ride_assignments to find the current job for THIS driver
+      // We use bookings!inner to ensure we only get assignments that have a valid booking
+      final response = await _supabase
+          .from('ride_assignments')
+          .select('''
+          *,
+          bookings!inner (
+            *
+          )
+        ''')
+          .eq('driver_id', widget.user.id) // Using your 'user' variable
+          .filter('bookings.status', 'in', '("accepting","on_way","picked_up","paid")')
+          .order('accepted_at', ascending: false)
+          .limit(1)
           .maybeSingle();
 
-      if (data != null && mounted) {
-        setState(() {
-          DriverState.currentRideData = data;
-        });
+      // If no active ride is found, stop here and let the driver see the "Search" UI
+      if (response == null || response['bookings'] == null) {
+        debugPrint("No active assignment found for driver: ${widget.user.id}");
+        if (mounted) setState(() => _isLoading = false);
+        return;
       }
+
+      // 2. Extract and format the booking data
+      final rideData = Map<String, dynamic>.from(response['bookings'] as Map);
+
+      // 3. Navigate to the Active Ride Page
+      if (mounted) {
+        Navigator.pushReplacementNamed(
+          context,
+          '/active_ride',
+          arguments: {
+            'rideData': rideData,
+            'driverUser': widget.user, // Passing the user object to the next page
+          },
+        );
+      }
+
     } catch (e) {
-      debugPrint("Check active ride error: $e");
+      debugPrint("⛔ Check Active Ride Error: $e");
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 

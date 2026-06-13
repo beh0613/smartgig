@@ -4,7 +4,9 @@ class CustomTextField extends StatelessWidget {
   final TextEditingController controller;
   final String hint;
   final bool obscure;
-  final TextInputType keyboardType; // Add this line
+  final TextInputType keyboardType;
+  final Function(String)? onChanged; // optional callback
+  final Widget? suffixIcon; // optional suffix icon for password
 
   const CustomTextField({
     super.key,
@@ -12,6 +14,8 @@ class CustomTextField extends StatelessWidget {
     required this.hint,
     this.obscure = false,
     this.keyboardType = TextInputType.text, // Default to normal text
+    this.onChanged,
+    this.suffixIcon,
   });
 
   @override
@@ -19,14 +23,14 @@ class CustomTextField extends StatelessWidget {
     return TextField(
       controller: controller,
       obscureText: obscure,
-      keyboardType: keyboardType, // Pass it to the actual TextField
+      keyboardType: keyboardType,
+      onChanged: onChanged,
       decoration: InputDecoration(
         hintText: hint,
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 16,
-          vertical: 14,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
         ),
+        suffixIcon: suffixIcon,
       ),
     );
   }
